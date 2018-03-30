@@ -101,6 +101,15 @@ class NaiveBayes(object):
             self.class_priors[label] += 1
         self.class_priors /= self.n_samples
 
+    def _compute_c_multidim_prior(self):
+        self.c_x_priors = []
+        for c in range(self.n_classes):
+            c_samples = self.samples[c == self.labels, :].astype(np.float32)
+            avg_vec = np.mean(c_samples)
+            cov_mat = np.cov(c_samples, c_samples)
+            self.c_x_priors.append((avg_vec, cov_mat))
+
+
     def _compute_c_x_prior(self):
 
         if self.continuous == 'all':
@@ -150,27 +159,39 @@ class NaiveBayes(object):
         exp = np.exp(-(x.astype(np.float32) - yita) ** 2 / (2 * sigma ** 2))
         return fraction * exp
 
-    def _predict(self, sample):
-        # p(x_k|c_j)
-        proba = [1] * self.n_classes
 
-        for i, p in enumerate(proba):
+    def _multi_gaussian(self, x_vec, c):
+        avg_vec, cov_mat = self.c_x_priors[c]
+        
+
+
+    def _naive_probas(self, sample):
+        probas = []
+
+        for i in range(self.n_classes):
+            p = 0
             # for class i, compute chaining proba for each attr
             for idx, attr in enumerate(sample):
                 if not idx in self.continuous:  # discrete values
                     entry = self.c_x_priors[i, idx]  # dict
                     total = self.n_samples * self.class_priors[i]
                     if entry.get(attr) is None:
-                        p *= 1. / (total + len(list(entry.values())) + 1)
+                        p += -np.log10(total + len(list(entry.values())) + 1)
                         # entry[attr] = 1
                         # self.c_x_priors[i, idx] = entry
                     else:
-                        p *= np.float32(entry[attr]) / (total)
+                        p += np.log10(entry[attr]) - np.log10(total)
                 else:
-                    p *= self._gaussian(attr, i, idx)  # the gaussian density for class i attr idx
+                    p += np.log10(self._gaussian(attr, i, idx))  # the gaussian density for class i attr idx
 
-            proba[i] = p
+            probas.append(p)
 
+        return probas
+
+
+    def _predict(self, sample):
+        # p(x_k|c_j)
+        proba = self._naive_probas(sample)
         pred = np.argmax(proba)
         pred = self.cls[pred]
 
@@ -196,7 +217,10 @@ class NaiveBayes(object):
 
         tmp =  [self._predict(sample) for sample in self.samples]
         probas, predicts = zip(*tmp) # list
-        logging.info('there are {} testing samples'.format(self.n_samples))
+        logging.info('there are {} testing samples'.format(len(self.samples)))
+
+        mappings = lambda x:1 if x==0 else (2 if x<0 else 3)
+        self.labels = np.array([mappings(a[0]*a[1]-a[2]*a[3])for a in self.samples])
 
         if self.labels is not None:
             # to avoid predicts converting to multidimensional array
@@ -222,8 +246,8 @@ class NaiveBayes(object):
 def main():
     logger = 'logger.txt'
     newdataset = True
-    train_files = (r'../uspst_uni_train.xls', r'../uspst_gnd_train.xls')#(r'../balance_uni_train.xls', r'../balance_gnd_train.xls')
-    test_files = (r'../uspst_uni_test.xls', None)
+    train_files = (r'../balance_uni_train.xls', r'../balance_gnd_train.xls')#(r'../uspst_uni_train.xls', r'../uspst_gnd_train.xls')
+    test_files = (r'../balance_uni_test.xls', None)
 
     cont = 'all' if newdataset else [0,2,4,10,11,12]
     trainf = train_files if newdataset else 'adult.data'
