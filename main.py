@@ -83,6 +83,9 @@ class Bayes(object):
         self._compute_class_pd_prior()
         logging.info('priors have been extracted from {} training samples'.format(self.n_samples))
 
+    def _prepare_labels(self):
+        pass
+
     def test(self, file):
         self._read_data(file=file, train=False)
 
@@ -90,6 +93,7 @@ class Bayes(object):
         probas, predicts = zip(*tmp)  # list
         logging.info('there are {} testing samples'.format(len(self.samples)))
 
+        self._prepare_labels()
         # mappings = lambda x:1 if x==0 else (2 if x<0 else 3)
         # self.labels = np.array([mappings(a[0]*a[1]-a[2]*a[3])for a in self.samples])
 
@@ -147,43 +151,6 @@ class NaiveBayes(Bayes):
         self.n_samples = len(self.samples)
         self.n_attribute = len(self.samples[0])
 
-    def _read_excel_data(self, file, train=True):
-        samples_f, labels_f = file
-
-        from pandas import read_excel
-        # process samples
-        samples = read_excel(samples_f, header=None)
-        # process labels
-        labels = read_excel(labels_f, header=None) if labels_f is not None else None
-
-        self.samples = samples.as_matrix()
-        # (len,) 1d array
-        tmp = np.squeeze(labels.as_matrix(), axis=-1) if labels is not None else None  # 1,2,3
-        if tmp is not None:
-            self.cls = []
-            for l in tmp:
-                if not l in self.cls:
-                    self.cls.append(l)
-                else:
-                    continue
-
-            self.labels = np.array([self.cls.index(x) for x in tmp])
-        else:
-            self.labels = None
-
-        if train:  # only update during training
-            self.n_classes = len(self.cls)  # 0,1,2
-            self.n_samples = len(self.samples)
-            self.n_attribute = len(self.samples[0])
-
-    def _compute_c_multidim_prior(self):
-        self.class_pd_priors = []
-        for c in range(self.n_classes):
-            c_samples = self.samples[c == self.labels, :].astype(np.float32)
-            avg_vec = np.mean(c_samples)
-            cov_mat = np.cov(c_samples, c_samples)
-            self.class_pd_priors.append((avg_vec, cov_mat))
-
     def _compute_class_pd_prior(self):
 
         if self.continuous == 'all':
@@ -218,19 +185,15 @@ class NaiveBayes(Bayes):
                                           for c in range(len(self.cls))]
 
     def _gaussian_log_density(self, x, c, i):
-        epsilon = 1e-10 # to avoid log0
+        epsilon = 0 # to avoid log0
         yita, sigma = self.class_pd_priors[c, i] # yita is the average, sigma is the std-dev
         sigma += epsilon
 
-        fraction = -(0.5*np.log10(2 * np.pi)+np.log10(sigma))
+        fraction = -(0.5*np.log(2 * np.pi)+np.log(sigma))
         exp = -(x.astype(np.float32) - yita) ** 2 / (2 * sigma ** 2)
 
         return fraction + exp
 
-    def _multi_gaussian(self, x_vec, c):
-        avg_vec, cov_mat = self.class_pd_priors[c]
-        result = multi_gauss(x_vec, avg_vec, cov_mat)
-        return result
 
     def _compute_class_probas(self, sample):
         probas = []
@@ -243,11 +206,11 @@ class NaiveBayes(Bayes):
                     entry = self.class_pd_priors[i, idx]  # dict
                     total = self.n_samples * self.class_priors[i]
                     if entry.get(attr) is None:
-                        p += -np.log10(total + len(list(entry.values())) + 1)
+                        p += -np.log(total + len(list(entry.values())) + 1)
                         # entry[attr] = 1
                         # self.c_x_priors[i, idx] = entry
                     else:
-                        p += np.log10(entry[attr]) - np.log10(total)
+                        p += np.log(entry[attr]) - np.log(total)
                 else:
                     p += self._gaussian_log_density(attr, i, idx)  # the gaussian density for class i attr idx
 
@@ -255,10 +218,70 @@ class NaiveBayes(Bayes):
 
         return probas
 
+class Test_Bayes(Bayes):
+    def _read_data(self, file, train=True):
+        samples_f, labels_f = file
+
+        from pandas import read_excel
+        # process samples
+        samples = read_excel(samples_f, header=None)
+        # process labels
+        labels = read_excel(labels_f, header=None) if labels_f is not None else None
+
+        self.samples = samples.as_matrix()
+        # (len,) 1d array
+        tmp = np.squeeze(labels.as_matrix(), axis=-1) if labels is not None else None  # 1,2,3
+        if tmp is not None:
+            self.cls = []
+            for l in tmp:
+                if not l in self.cls:
+                    self.cls.append(l)
+                else:
+                    continue
+
+            self.labels = np.array([self.cls.index(x) for x in tmp])
+        else:
+            self.labels = None
+
+        if train:  # only update during training
+            self.n_classes = len(self.cls)  # 0,1,2
+            self.n_samples = len(self.samples)
+            self.n_attribute = len(self.samples[0])
+
+class Test_NaiveBayes(Test_Bayes, NaiveBayes):
+    pass
+
+class multinomial_Bayes(Bayes):
+    def _compute_class_pd_prior(self):
+        self.class_pd_priors = []
+        for c in range(self.n_classes):
+            c_samples = self.samples[c == self.labels, :].astype(np.float32)
+            avg_vec = np.mean(c_samples, axis=0)
+            c_samples = np.transpose(c_samples)
+            cov_mat = np.cov(c_samples)
+            self.class_pd_priors.append((avg_vec, cov_mat))
+
+    def _multi_gaussian_log_density(self, x_vec, c):
+        avg_vec, cov_mat = self.class_pd_priors[c]
+        result = multi_gauss.logpdf(x_vec, avg_vec, cov_mat)
+        return result
+
+    def _compute_class_probas(self, sample):
+
+        # avg_vec, cov_mat = self.class_pd_priors[c]
+        return [self._multi_gaussian_log_density(sample, c) for c in range(self.n_classes)]
+
+class Test_multi_Bayes(multinomial_Bayes, Test_Bayes):
+    pass
+
+class balance_multi_bayes(Test_multi_Bayes):
+    def _prepare_labels(self):
+        mappings = lambda x:1 if x==0 else (2 if x<0 else 3)
+        self.labels = np.array([mappings(a[0]*a[1]-a[2]*a[3])for a in self.samples])
 
 def main():
     logger = 'logger.txt'
-    newdataset = False
+    newdataset = True
     train_files = (
     r'../balance_uni_train.xls', r'../balance_gnd_train.xls')  # (r'../uspst_uni_train.xls', r'../uspst_gnd_train.xls')
     test_files = (r'../balance_uni_test.xls', None)
@@ -267,7 +290,8 @@ def main():
     trainf = train_files if newdataset else 'adult.data'
     testf = test_files if newdataset else 'adult.test'
 
-    nb = NaiveBayes(continuous_attr=cont, logger=logger)
+    NB = balance_multi_bayes if newdataset else NaiveBayes
+    nb = NB(continuous_attr=cont, logger=logger)
     nb.train(file=trainf)
     nb.test(file=testf)
 
