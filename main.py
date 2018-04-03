@@ -30,7 +30,7 @@ class Bayes(object):
                             level=logging.DEBUG, format='%(message)s')  # debug < info < warning < error < critical
         self.continuous = continuous_attr
         self.samples = None
-        self.labels = None
+        self.raw_labels = None
         self.cls = []
         self.n_samples = None
         self.n_attribute = None
@@ -47,7 +47,7 @@ class Bayes(object):
 
     def _compute_class_prior(self):
         self.class_priors = np.array([0] * self.n_classes, dtype=np.float32)
-        for sample, label in zip(self.samples, self.labels):
+        for sample, label in zip(self.samples, self.raw_labels):
             self.class_priors[label] += 1
         self.class_priors /= self.n_samples
 
@@ -71,9 +71,10 @@ class Bayes(object):
 
     def _predict(self, sample):
         # p(x_k|c_j)
+
         proba = self._compute_class_probas(sample)
         pred = np.argmax(proba)
-        pred = self.cls[pred]
+        # pred = self.cls[pred]
 
         return proba, pred
 
@@ -90,34 +91,37 @@ class Bayes(object):
         self._read_data(file=file, train=False)
 
         tmp = [self._predict(sample) for sample in self.samples]
-        probas, predicts = zip(*tmp)  # list
+        probas, raw_predicts = zip(*tmp)  # list
+        mapped_predicts = [self.cls[p] for p in raw_predicts]
         logging.info('there are {} testing samples'.format(len(self.samples)))
 
         self._prepare_labels()
         # mappings = lambda x:1 if x==0 else (2 if x<0 else 3)
         # self.labels = np.array([mappings(a[0]*a[1]-a[2]*a[3])for a in self.samples])
 
-        if self.labels is not None:
+        if self.raw_labels is not None:
             # to avoid predicts converting to multidimensional array
             # the return value of each predict is a tuple
-            correctness = self.labels == np.array(predicts)
+            correctness = self.raw_labels == np.array(raw_predicts)
             accuracy = np.sum(correctness)
             accuracy /= self.n_samples
             for idx, is_correct in enumerate(correctness):
                 logging.info('-------------{}-------------'.format(idx))
                 if is_correct:
-                    logging.info('sample={} is predicted {}'.format(self.samples[idx], predicts[idx]))
+                    logging.info('sample={} is predicted {}'.format(self.samples[idx], raw_predicts[idx]))
                 else:
                     logging.warning('\n=====================================\n'
                                     + 'sample={} is predicted {}\nwrong answer, should be {}. the estimated proba is {}\n'.format(
-                        self.samples[idx], predicts[idx], self.labels[idx], probas[idx])
+                        self.samples[idx], raw_predicts[idx], self.raw_labels[idx], probas[idx])
                                     + '=====================================\n')
             logging.info('\nthe overall accuracy is {}'.format(accuracy))
         else:
-            for idx, predicted in enumerate(predicts):
+            for idx, predicted in enumerate(mapped_predicts):
                 logging.info('-------------{}-------------'.format(idx))
                 logging.info('sample={} is predicted {} with estimated proba {}'.format(self.samples[idx], predicted,
                                                                                         probas[idx]))
+
+        return mapped_predicts
 
 
 class NaiveBayes(Bayes):
@@ -239,14 +243,23 @@ class Test_Bayes(Bayes):
                 else:
                     continue
 
-            self.labels = np.array([self.cls.index(x) for x in tmp])
+            self.raw_labels = np.array([self.cls.index(x) for x in tmp])
         else:
-            self.labels = None
+            self.raw_labels = None
 
         if train:  # only update during training
             self.n_classes = len(self.cls)  # 0,1,2
             self.n_samples = len(self.samples)
             self.n_attribute = len(self.samples[0])
+
+    def test(self, file):
+        mapped_predicts = super().test(file)
+        mapped_predicts = np.expand_dims(np.array(mapped_predicts), axis=-1) # len x 1
+
+        from pandas import DataFrame
+        df = DataFrame(mapped_predicts)
+        df.to_excel('result.xls', index=False, header=False)
+
 
 class Test_NaiveBayes(Test_Bayes, NaiveBayes):
     pass
@@ -255,7 +268,7 @@ class multinomial_Bayes(Bayes):
     def _compute_class_pd_prior(self):
         self.class_pd_priors = []
         for c in range(self.n_classes):
-            c_samples = self.samples[c == self.labels, :].astype(np.float32)
+            c_samples = self.samples[c == self.raw_labels, :].astype(np.float32)
             avg_vec = np.mean(c_samples, axis=0)
             c_samples = np.transpose(c_samples)
             cov_mat = np.cov(c_samples)
@@ -263,7 +276,8 @@ class multinomial_Bayes(Bayes):
 
     def _multi_gaussian_log_density(self, x_vec, c):
         avg_vec, cov_mat = self.class_pd_priors[c]
-        result = multi_gauss.logpdf(x_vec, avg_vec, cov_mat)
+        result = multi_gauss.logpdf(x_vec, avg_vec, cov_mat, allow_singular=True)
+
         return result
 
     def _compute_class_probas(self, sample):
@@ -274,23 +288,22 @@ class multinomial_Bayes(Bayes):
 class Test_multi_Bayes(multinomial_Bayes, Test_Bayes):
     pass
 
-class balance_multi_bayes(Test_multi_Bayes):
-    def _prepare_labels(self):
-        mappings = lambda x:1 if x==0 else (2 if x<0 else 3)
-        self.labels = np.array([mappings(a[0]*a[1]-a[2]*a[3])for a in self.samples])
+# class balance_multi_bayes(Test_multi_Bayes):
+#     def _prepare_labels(self):
+#         mappings = lambda x:1 if x==0 else (2 if x<0 else 3)
+#         self.labels = np.array([mappings(a[0]*a[1]-a[2]*a[3])for a in self.samples])
 
 def main():
     logger = 'logger.txt'
     newdataset = True
-    train_files = (
-    r'../balance_uni_train.xls', r'../balance_gnd_train.xls')  # (r'../uspst_uni_train.xls', r'../uspst_gnd_train.xls')
-    test_files = (r'../balance_uni_test.xls', None)
+    train_files = (r'../uspst_uni_train.xls', r'../uspst_gnd_train.xls')
+    test_files = (r'../uspst_uni_test.xls', None)
 
     cont = 'all' if newdataset else [0, 2, 4, 10, 11, 12]
     trainf = train_files if newdataset else 'adult.data'
     testf = test_files if newdataset else 'adult.test'
 
-    NB = balance_multi_bayes if newdataset else NaiveBayes
+    NB = Test_multi_Bayes if newdataset else NaiveBayes
     nb = NB(continuous_attr=cont, logger=logger)
     nb.train(file=trainf)
     nb.test(file=testf)
