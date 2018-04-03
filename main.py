@@ -108,11 +108,11 @@ class Bayes(object):
             for idx, is_correct in enumerate(correctness):
                 logging.info('-------------{}-------------'.format(idx))
                 if is_correct:
-                    logging.info('sample={} is predicted {}'.format(self.samples[idx], raw_predicts[idx]))
+                    logging.info('sample={} is predicted {}'.format(self.samples[idx], mapped_predicts[idx]))
                 else:
                     logging.warning('\n=====================================\n'
                                     + 'sample={} is predicted {}\nwrong answer, should be {}. the estimated proba is {}\n'.format(
-                        self.samples[idx], raw_predicts[idx], self.raw_labels[idx], probas[idx])
+                        self.samples[idx], mapped_predicts[idx], self.cls[self.raw_labels[idx]], probas[idx])
                                     + '=====================================\n')
             logging.info('\nthe overall accuracy is {}'.format(accuracy))
         else:
@@ -124,12 +124,12 @@ class Bayes(object):
         return mapped_predicts
 
 
-class NaiveBayes(Bayes):
+class NaiveBayes(Bayes): # cannot make sure all float32
 
     def _read_data(self, file, train=True):
         # cls = []
         self.samples = []
-        self.labels = []
+        self.raw_labels = []
         with open(file) as f:
             for line in f.readlines():
                 sample = [x.strip().strip('.') for x in line.split(',')]
@@ -145,12 +145,15 @@ class NaiveBayes(Bayes):
                         tmp = label
                         label = len(self.cls)
                         self.cls.append(tmp)
+                    self.raw_labels.append(label)
+                else:# test
+                    self.raw_labels.append(self.cls.index(label))
 
                 self.samples.append(sample)
-                self.labels.append(label)
+
 
         self.samples = np.array(self.samples)
-        self.labels = np.array(self.labels)
+        self.raw_labels = np.array(self.raw_labels, dtype=np.int)
         self.n_classes = len(self.cls)
         self.n_samples = len(self.samples)
         self.n_attribute = len(self.samples[0])
@@ -160,7 +163,7 @@ class NaiveBayes(Bayes):
         if self.continuous == 'all':
             self.continuous = []
             for i in range(self.n_attribute):
-                all_cls_stds = [np.std(self.samples[c == self.labels, i].astype(np.float32)) for c in
+                all_cls_stds = [np.std(self.samples[c == self.raw_labels, i].astype(np.float32)) for c in
                                 range(len(self.cls))]
                 if not 0. in all_cls_stds:
                     self.continuous.append(i)
@@ -170,7 +173,7 @@ class NaiveBayes(Bayes):
         # m x n x a
         # sample : n x 1 可用花式索引 [label, list(range(n_attribute)), sample]
         # self.x_c_priors = np.array([0]*(self.n_classes*self.n_attribute*self.attr_max))
-        for sample, label in zip(self.samples, self.labels):
+        for sample, label in zip(self.samples, self.raw_labels):
             for i in range(self.n_attribute):
 
                 if not i in self.continuous:
@@ -184,8 +187,8 @@ class NaiveBayes(Bayes):
                     self.class_pd_priors[label, i] = entry
 
         for i in self.continuous:  # should make sure it's numerical value
-            self.class_pd_priors[:, i] = [(np.mean(self.samples[c == self.labels, i].astype(np.float32)),
-                                           np.std(self.samples[c == self.labels, i].astype(np.float32)))
+            self.class_pd_priors[:, i] = [(np.mean(self.samples[c == self.raw_labels, i].astype(np.float32)),
+                                           np.std(self.samples[c == self.raw_labels, i].astype(np.float32)))
                                           for c in range(len(self.cls))]
 
     def _gaussian_log_density(self, x, c, i):
@@ -228,7 +231,7 @@ class Test_Bayes(Bayes):
 
         from pandas import read_excel
         # process samples
-        samples = read_excel(samples_f, header=None)
+        samples = read_excel(samples_f, header=None, dtype=np.float64)
         # process labels
         labels = read_excel(labels_f, header=None) if labels_f is not None else None
 
@@ -243,7 +246,7 @@ class Test_Bayes(Bayes):
                 else:
                     continue
 
-            self.raw_labels = np.array([self.cls.index(x) for x in tmp])
+            self.raw_labels = np.array([self.cls.index(x) for x in tmp], dtype=np.int)
         else:
             self.raw_labels = None
 
@@ -286,18 +289,18 @@ class multinomial_Bayes(Bayes):
         return [self._multi_gaussian_log_density(sample, c) for c in range(self.n_classes)]
 
 class Test_multi_Bayes(multinomial_Bayes, Test_Bayes):
-    pass
+    def _prepare_labels(self):
+        mappings = lambda x:0 if x==0 else (1 if x<0 else 2)
+        self.raw_labels = np.array([mappings(a[0]*a[1]-a[2]*a[3])for a in self.samples])
 
-# class balance_multi_bayes(Test_multi_Bayes):
-#     def _prepare_labels(self):
-#         mappings = lambda x:1 if x==0 else (2 if x<0 else 3)
-#         self.labels = np.array([mappings(a[0]*a[1]-a[2]*a[3])for a in self.samples])
+
+
 
 def main():
     logger = 'logger.txt'
-    newdataset = True
-    train_files = (r'../uspst_uni_train.xls', r'../uspst_gnd_train.xls')
-    test_files = (r'../uspst_uni_test.xls', None)
+    newdataset = False
+    train_files = (r'../balance_uni_train.xls', r'../balance_gnd_train.xls')
+    test_files = (r'../balance_uni_test.xls', None)
 
     cont = 'all' if newdataset else [0, 2, 4, 10, 11, 12]
     trainf = train_files if newdataset else 'adult.data'
