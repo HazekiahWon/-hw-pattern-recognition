@@ -19,21 +19,30 @@
 #   all of the above computation is done by the training data
 import numpy as np
 from scipy.stats import multivariate_normal as multi_gauss
+from sklearn.decomposition import PCA
 import logging
 import abc
 
 
+
 class Bayes(object):
-    def __init__(self, continuous_attr, logger='logger.txt', dataset='unknown'):
+    def __init__(self, continuous_attr, logger='logger.txt', dataset='unknown',
+                 use_validation=False, train_ratio=None,
+                 use_pca=True, n_components=120):
         np.seterr(divide='raise')
         logging.basicConfig(filename=logger, filemode='w',
                             level=logging.DEBUG, format='%(message)s')  # debug < info < warning < error < critical
         self.dataset_name = dataset
         self.continuous = continuous_attr
-        self.samples = []
-        self.raw_labels = []
+        self.use_split = use_validation
+        self.use_pca = use_pca
+        self.n_components = n_components
+        self.train_ratio = train_ratio
+        self.all_samples = []
+        self.all_raw_labels = []
         self.cls = []
-        self.n_samples = None
+        self.n_all_samples = None
+        self.n_train_samples = None
         self.n_attribute = None
         self.n_classes = None
         self.class_priors = None
@@ -46,11 +55,17 @@ class Bayes(object):
         """
         pass
 
+    def _split_data(self, train_ratio=0.8):
+        n_train_samples = np.ceil(train_ratio*self.n_all_samples)
+        self.train_indices = np.random.choice(self.n_all_samples, replace=False, size=np.int(n_train_samples))
+        self.validate_indices = np.setdiff1d(np.arange(start=0,stop=self.n_all_samples), self.train_indices)
+
+
     def _compute_class_prior(self):
         self.class_priors = np.array([0] * self.n_classes, dtype=np.float32)
         for sample, label in zip(self.samples, self.raw_labels):
             self.class_priors[label] += 1
-        self.class_priors /= self.n_samples
+        self.class_priors /= self.n_train_samples
 
     @abc.abstractmethod
     def _compute_class_pd_prior(self):  # proba density
@@ -81,42 +96,82 @@ class Bayes(object):
 
     def train(self, file):
         self._read_data(file)
+        if self.use_split:# split data if using validation
+            self._split_data(train_ratio=0.8 if self.train_ratio is None else self.train_ratio)
+            self.samples = self.all_samples[self.train_indices]
+            self.raw_labels = self.all_raw_labels[self.train_indices]
+            self.n_train_samples = len(self.train_indices)
+        else :
+            self.samples = self.all_samples
+            self.raw_labels = self.all_raw_labels
+            self.n_train_samples = self.n_all_samples
+
         self._compute_class_prior()
         self._compute_class_pd_prior()
-        logging.info('priors have been extracted from {} training samples'.format(self.n_samples))
+        logging.info('priors have been extracted from {} training samples'.format(self.n_train_samples))
+
+        self.test(file=None)
 
     def _prepare_labels(self):
         pass
 
-    def test(self, file):
-        self._read_data(file=file, train=False)
+    def test(self, file, verbose=False):
+        #===== preparing data and labels ========#
+        mode = None
+        if file is None:# means validation after training
 
+            if self.use_split:
+                self.samples = self.all_samples[self.validate_indices]
+                self.raw_labels = self.all_raw_labels[self.validate_indices]
+                mode = 'validation (using split)'
+            else:
+                self.samples = self.all_samples
+                self.raw_labels = self.all_raw_labels
+                mode = 'validation (using original training set)'
+        else:# provide file means testing
+            # might well have loaded validation data
+            self.all_samples = None
+            self.all_raw_labels = None
+
+            self._read_data(file=file, train=False)
+
+            self.samples = self.all_samples
+            self.raw_labels = self.all_raw_labels # meaning that there will not be labels
+
+            self._prepare_labels()  # in case for the given datasets
+
+            mode = 'testing'
+
+        #=========== making predicts and maps it ==========#
         tmp = [self._predict(sample) for sample in self.samples]
         probas, raw_predicts = zip(*tmp)  # list
         mapped_predicts = [self.cls[p] for p in raw_predicts]
-        logging.info('there are {} testing samples'.format(len(self.samples)))
 
-        self._prepare_labels()
-        # mappings = lambda x:1 if x==0 else (2 if x<0 else 3)
-        # self.labels = np.array([mappings(a[0]*a[1]-a[2]*a[3])for a in self.samples])
+        #=========== logging ==============================#
+        prompts = 'there are {} samples for {}'.format(len(self.samples),mode)
+        logging.info('='*len(prompts))
+        logging.info(prompts)
+        logging.info('='*len(prompts))
 
-        if self.raw_labels is not None:
+        #=========== evaluating predictions ===============#
+        if self.raw_labels is not None: # meaning it's validation
             # to avoid predicts converting to multidimensional array
             # the return value of each predict is a tuple
             correctness = self.raw_labels == np.array(raw_predicts)
             accuracy = np.sum(correctness)
             accuracy /= len(self.samples)
-            for idx, is_correct in enumerate(correctness):
-                logging.info('-------------{}-------------'.format(idx))
-                if is_correct:
-                    logging.info('sample={} is predicted {}'.format(self.samples[idx], mapped_predicts[idx]))
-                else:
-                    logging.warning('\n=====================================\n'
-                                    + 'sample={} is predicted {}\nwrong answer, should be {}. the estimated proba is {}\n'.format(
-                        self.samples[idx], mapped_predicts[idx], self.cls[self.raw_labels[idx]], probas[idx])
-                                    + '=====================================\n')
+            if verbose:
+                for idx, is_correct in enumerate(correctness):
+                    logging.info('-------------{}-------------'.format(idx))
+                    if is_correct:
+                        logging.info('sample={} is predicted {}'.format(self.samples[idx], mapped_predicts[idx]))
+                    else:
+                        logging.warning('\n=====================================\n'
+                                        + 'sample={} is predicted {}\nwrong answer, should be {}. the estimated proba is {}\n'.format(
+                            self.samples[idx], mapped_predicts[idx], self.cls[self.raw_labels[idx]], probas[idx])
+                                        + '=====================================\n')
             logging.info('\nthe overall accuracy is {}'.format(accuracy))
-        else:
+        else: # meaning it's testing
             for idx, predicted in enumerate(mapped_predicts):
                 logging.info('-------------{}-------------'.format(idx))
                 logging.info('sample={} is predicted {} with estimated proba {}'.format(self.samples[idx], predicted,
@@ -129,8 +184,8 @@ class NaiveBayes(Bayes): # cannot make sure all float32
 
     def _read_data(self, file, train=True):
         # cls = []
-        self.samples = []
-        self.raw_labels = []
+        self.all_samples = []
+        self.all_raw_labels = []
         with open(file) as f:
             for line in f.readlines():
                 sample = [x.strip().strip('.') for x in line.split(',')]
@@ -146,19 +201,19 @@ class NaiveBayes(Bayes): # cannot make sure all float32
                         tmp = label
                         label = len(self.cls)
                         self.cls.append(tmp)
-                    self.raw_labels.append(label)
+                    self.all_raw_labels.append(label)
                 else:# test
-                    self.raw_labels.append(self.cls.index(label))
+                    self.all_raw_labels.append(self.cls.index(label))
 
-                self.samples.append(sample)
+                self.all_samples.append(sample)
 
 
-        self.samples = np.array(self.samples)
-        self.raw_labels = np.array(self.raw_labels, dtype=np.int)
+        self.all_samples = np.array(self.all_samples)
+        self.all_raw_labels = np.array(self.all_raw_labels, dtype=np.int)
         if train:
             self.n_classes = len(self.cls)
-            self.n_samples = len(self.samples)
-            self.n_attribute = len(self.samples[0])
+            self.n_all_samples = len(self.all_samples)
+            self.n_attribute = len(self.all_samples[0])
 
     def _compute_class_pd_prior(self):
 
@@ -213,7 +268,7 @@ class NaiveBayes(Bayes): # cannot make sure all float32
             for idx, attr in enumerate(sample):
                 if not idx in self.continuous:  # discrete values
                     entry = self.class_pd_priors[i, idx]  # dict
-                    total = self.n_samples * self.class_priors[i]
+                    total = self.n_train_samples * self.class_priors[i]
                     if entry.get(attr) is None:
                         p += -np.log(total + len(list(entry.values())) + 1)
                         # entry[attr] = 1
@@ -227,7 +282,7 @@ class NaiveBayes(Bayes): # cannot make sure all float32
 
         return probas
 
-class Test_Bayes(Bayes):
+class Bayes4Test(Bayes):
     def _read_data(self, file, train=True):
         samples_f, labels_f = file
 
@@ -237,7 +292,7 @@ class Test_Bayes(Bayes):
         # process labels
         labels = read_excel(labels_f, header=None) if labels_f is not None else None
 
-        self.samples = samples.as_matrix()
+        self.all_samples = samples.as_matrix()
         # (len,) 1d array
         tmp = np.squeeze(labels.as_matrix(), axis=-1) if labels is not None else None  # 1,2,3
         if tmp is not None:
@@ -248,25 +303,37 @@ class Test_Bayes(Bayes):
                 else:
                     continue
 
-            self.raw_labels = np.array([self.cls.index(x) for x in tmp], dtype=np.int)
+            self.all_raw_labels = np.array([self.cls.index(x) for x in tmp], dtype=np.int)
         else:
-            self.raw_labels = None
+            self.all_raw_labels = None
 
         if train:  # only update during training
             self.n_classes = len(self.cls)  # 0,1,2
-            self.n_samples = len(self.samples)
-            self.n_attribute = len(self.samples[0])
+            self.n_all_samples = len(self.all_samples)
+            self.n_attribute = len(self.all_samples[0])
 
-    def test(self, file):
-        mapped_predicts = super().test(file)
+    def test(self, file, verbose=False):
+        mapped_predicts = super().test(file, verbose)
         mapped_predicts = np.expand_dims(np.array(mapped_predicts), axis=-1) # len x 1
+        if file is not None:# exactly testing
+            from pandas import DataFrame
+            df = DataFrame(mapped_predicts)
+            df.to_excel('result_{}.xls'.format(self.dataset_name), index=False, header=False)
 
-        from pandas import DataFrame
-        df = DataFrame(mapped_predicts)
-        df.to_excel('result_{}.xls'.format(self.dataset_name), index=False, header=False)
+
+class Bayes4Test_PCA(Bayes4Test):
+    def _read_data(self, file, train=True):
+        super()._read_data(file, train)
+        if self.use_pca:
+            if train:
+                pca = PCA(n_components=self.n_components, whiten=True)
+                pca.fit(self.all_samples)
+                logging.info('using pca with {} holding {}'.format(len(pca.explained_variance_ratio_), np.sum(pca.explained_variance_ratio_)))
+                self.pca = pca
+            self.all_samples = self.pca.transform(self.all_samples)
 
 
-class Test_NaiveBayes(Test_Bayes, NaiveBayes):
+class NaiveBayes4Test(Bayes4Test, NaiveBayes):
     pass
 
 class multinomial_Bayes(Bayes):
@@ -282,8 +349,6 @@ class multinomial_Bayes(Bayes):
     def _multi_gaussian_log_density(self, x_vec, c):
         avg_vec, cov_mat = self.class_pd_priors[c]
         result = multi_gauss.logpdf(x_vec, avg_vec, cov_mat, allow_singular=True)
-        if result>0:
-            print('wrong')
 
         return result
 
@@ -292,17 +357,17 @@ class multinomial_Bayes(Bayes):
         # avg_vec, cov_mat = self.class_pd_priors[c]
         return [self._multi_gaussian_log_density(sample, c) for c in range(self.n_classes)]
 
-class Test_multi_Bayes(multinomial_Bayes, Test_Bayes):
+class multi_Bayes4Test(multinomial_Bayes, Bayes4Test_PCA):
     # pass
     def _prepare_labels(self):
         mappings = lambda x:0 if x==0 else (1 if x<0 else 2)
         self.raw_labels = np.array([mappings(a[0]*a[1]-a[2]*a[3])for a in self.samples])
 
-class ups_multi_Bayes(NaiveBayes, Test_Bayes):
+class ups_multi_Bayes4Test(multinomial_Bayes, Bayes4Test_PCA):
     def _read_data(self, file, train=True):
         # init for self.samples and self.raw_inputs
-        self.samples = []
-        self.raw_labels = []
+        self.all_samples = []
+        self.all_raw_labels = []
         # self.cls = []
         with open(file) as f:
             for line in f.readlines():
@@ -316,24 +381,24 @@ class ups_multi_Bayes(NaiveBayes, Test_Bayes):
                         tmp = label
                         label = len(self.cls)
                         self.cls.append(tmp)
-                    self.raw_labels.append(label)
+                    self.all_raw_labels.append(label)
                 else:# test
-                    self.raw_labels.append(self.cls.index(label))
+                    self.all_raw_labels.append(self.cls.index(label))
 
                 # obtaining attrs
                 attrs = [eval(f.split(':')[-1]) for f in fields[1:] if f!='\n']
-                self.samples.append(attrs)
+                self.all_samples.append(attrs)
 
-        self.samples = np.array(self.samples, dtype=np.float64)
-        self.raw_labels = np.array(self.raw_labels, dtype=np.int)
+        self.all_samples = np.array(self.all_samples, dtype=np.float64)
+        self.all_raw_labels = np.array(self.all_raw_labels, dtype=np.int)
         if train:
-            self.n_samples = len(self.samples)
-            self.n_attribute = len(self.samples[0])
+            self.n_all_samples = len(self.all_samples)
+            self.n_attribute = len(self.all_samples[0])
             self.n_classes = len(self.cls)
 
 def main():
     logger = 'logger_{}.txt'
-    dataset = 'uspst'
+    dataset = 'balance'
     train_files = {'balance':(r'../balance_uni_train.xls', r'../balance_gnd_train.xls'),
                    'adult':'adult.data',
                    'ups':'../usps',
@@ -342,23 +407,24 @@ def main():
                   'adult':'adult.test',
                   'ups':'../usps.t',
                   'uspst':(r'../uspst_uni_test.xls', None)}
-    cls = {'balance':Test_multi_Bayes,
+    cls = {'balance':multi_Bayes4Test,
            'adult':NaiveBayes,
-           'ups':ups_multi_Bayes,
-           'uspst':Test_NaiveBayes}
+           'ups':ups_multi_Bayes4Test,
+           'uspst':multi_Bayes4Test}
 
     cont_values = {'balance':None,
                    'adult': [0, 2, 4, 10, 11, 12],
-                   'ups':'all',
-                   'uspst':'all'}
+                   'ups':None,
+                   'uspst':None}
 
     trainf = train_files[dataset]
     testf = test_files[dataset]
 
     Method = cls[dataset]
-    nb = Method(continuous_attr=cont_values[dataset], logger=logger.format(dataset), dataset=dataset)
+    nb = Method(continuous_attr=cont_values[dataset], logger=logger.format(dataset), dataset=dataset,
+                use_validation=False, train_ratio=0.9, use_pca=False, n_components=4)
     nb.train(file=trainf)
-    nb.test(file=testf)
+    nb.test(file=testf, verbose=True) # testing
 
 
 if __name__ == '__main__':
