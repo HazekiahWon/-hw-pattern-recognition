@@ -1,0 +1,6 @@
+priors have been extracted from 7291 training samples
+===================================================================
+there are 7291 samples for validation (using original training set)
+===================================================================
+
+the overall accuracy is 0.8557125222877521

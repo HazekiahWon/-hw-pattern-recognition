@@ -443,14 +443,14 @@ def threading_data(data=None, fn=None, thread_count=None, **kwargs):
 def main():
     logger = 'logger_{}.txt'
     dataset = 'uspst'
-    train_files = {'balance':(r'../balance_uni_train.xls', r'../balance_gnd_train.xls'),
-                   'adult':'adult.data',
-                   'ups':'../usps',
-                   'uspst':(r'../uspst_uni_train.xls', r'../uspst_gnd_train.xls')}
-    test_files = {'balance':(r'../balance_uni_test.xls', None),
-                  'adult':'adult.test',
-                  'ups':'../usps.t',
-                  'uspst':(r'../uspst_uni_test.xls', None)}
+    train_files = {'balance':(r'datasets/balance_uni_train.xls', r'datasets/balance_gnd_train.xls'),
+                   'adult':'datasets/adult.data',
+                   'ups':'datasets/usps',
+                   'uspst':(r'datasets/uspst_uni_train.xls', r'datasets/uspst_gnd_train.xls')}
+    test_files = {'balance':(r'datasets/balance_uni_test.xls', None),
+                  'adult':'datasets/adult.test',
+                  'ups':'datasets/usps.t',
+                  'uspst':(r'datasets/uspst_uni_test.xls', None)}
     cls = {'balance':multi_Bayes4Test,
            'adult':NaiveBayes,
            'ups':ups_multi_Bayes4Test,
