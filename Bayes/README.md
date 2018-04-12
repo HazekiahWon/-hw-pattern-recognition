@@ -11,10 +11,12 @@ a sub class adapted to the given dataset with custom `_read_data()`
 5. `Bayes4Test_PCA`  
 a sub class that further incorporates PCA dimensionality reduction while inheriting from the `Bayes4Test`
 
-# Additional Files
+# Main program
 - main.py  
 you will find all codes here  
-can be safely imported as a small library for Bayes  
+can be safely imported as a small library for Bayes 
+
+# Additional Files 
 - logger_*.txt  
 the logger file recording information during training, validation and testing phase  
 Note that you can turn some off by switching the `verbose` param of `test()`

@@ -324,7 +324,7 @@ class Bayes4Test(Bayes):
             # if file is not None:# exactly testing
             from pandas import DataFrame
             df = DataFrame(ret)
-            df.to_excel('result_{}.xls'.format(self.dataset_name), index=False, header=False)
+            df.to_excel('results/result_{}.xls'.format(self.dataset_name), index=False, header=False)
 
 
 
@@ -441,7 +441,7 @@ def threading_data(data=None, fn=None, thread_count=None, **kwargs):
         return np.concatenate(results)
 
 def main():
-    logger = 'logger_{}.txt'
+    logger = 'loggers/logger_{}.txt'
     dataset = 'uspst'
     train_files = {'balance':(r'datasets/balance_uni_train.xls', r'datasets/balance_gnd_train.xls'),
                    'adult':'datasets/adult.data',
