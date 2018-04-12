@@ -20,8 +20,10 @@
 import numpy as np
 from scipy.stats import multivariate_normal as multi_gauss
 from sklearn.decomposition import PCA
+from pandas import read_excel
 import logging
 import abc
+import threading
 
 
 
@@ -88,7 +90,7 @@ class Bayes(object):
     def _predict(self, sample):
         # p(x_k|c_j)
 
-        proba = self._compute_class_probas(sample)
+        proba = self._compute_class_probas(sample) # overrided, using multinomial gaussian
         pred = np.argmax(proba)
         # pred = self.cls[pred]
 
@@ -107,10 +109,10 @@ class Bayes(object):
             self.n_train_samples = self.n_all_samples
 
         self._compute_class_prior()
-        self._compute_class_pd_prior()
+        self._compute_class_pd_prior() # check out self.class_priors, self.class_pd_priors
         logging.info('priors have been extracted from {} training samples'.format(self.n_train_samples))
 
-        self.test(file=None)
+        return self.test(file=None)
 
     def _prepare_labels(self):
         pass
@@ -143,7 +145,7 @@ class Bayes(object):
             mode = 'testing'
 
         #=========== making predicts and maps it ==========#
-        tmp = [self._predict(sample) for sample in self.samples]
+        tmp = [self._predict(sample) for sample in self.samples] # in validation, making predictions
         probas, raw_predicts = zip(*tmp)  # list
         mapped_predicts = [self.cls[p] for p in raw_predicts]
 
@@ -171,13 +173,14 @@ class Bayes(object):
                             self.samples[idx], mapped_predicts[idx], self.cls[self.raw_labels[idx]], probas[idx])
                                         + '=====================================\n')
             logging.info('\nthe overall accuracy is {}'.format(accuracy))
+            return accuracy
         else: # meaning it's testing
             for idx, predicted in enumerate(mapped_predicts):
                 logging.info('-------------{}-------------'.format(idx))
                 logging.info('sample={} is predicted {} with estimated proba {}'.format(self.samples[idx], predicted,
                                                                                         probas[idx]))
 
-        return mapped_predicts
+            return mapped_predicts
 
 
 class NaiveBayes(Bayes): # cannot make sure all float32
@@ -286,7 +289,7 @@ class Bayes4Test(Bayes):
     def _read_data(self, file, train=True):
         samples_f, labels_f = file
 
-        from pandas import read_excel
+
         # process samples
         samples = read_excel(samples_f, header=None, dtype=np.float64)
         # process labels
@@ -313,24 +316,29 @@ class Bayes4Test(Bayes):
             self.n_attribute = len(self.all_samples[0])
 
     def test(self, file, verbose=False):
-        mapped_predicts = super().test(file, verbose)
-        mapped_predicts = np.expand_dims(np.array(mapped_predicts), axis=-1) # len x 1
-        if file is not None:# exactly testing
+        ret = super().test(file, verbose)
+        if file is None:# ret is accuracy
+            return ret
+        else : # ret is mapped predicts
+            ret = np.expand_dims(np.array(ret), axis=-1) # len x 1
+            # if file is not None:# exactly testing
             from pandas import DataFrame
-            df = DataFrame(mapped_predicts)
+            df = DataFrame(ret)
             df.to_excel('result_{}.xls'.format(self.dataset_name), index=False, header=False)
+
 
 
 class Bayes4Test_PCA(Bayes4Test):
     def _read_data(self, file, train=True):
-        super()._read_data(file, train)
+        super()._read_data(file, train) # check out self.cls,self.all_samples
+        # self.tmp = self.all_samples
         if self.use_pca:
             if train:
-                pca = PCA(n_components=self.n_components, whiten=True)
+                pca = PCA(n_components=self.n_components, whiten=True, svd_solver='full')
                 pca.fit(self.all_samples)
                 logging.info('using pca with {} holding {}'.format(len(pca.explained_variance_ratio_), np.sum(pca.explained_variance_ratio_)))
                 self.pca = pca
-            self.all_samples = self.pca.transform(self.all_samples)
+            self.all_samples = self.pca.transform(self.all_samples) # check out self.pca, transformed samples
 
 
 class NaiveBayes4Test(Bayes4Test, NaiveBayes):
@@ -358,10 +366,11 @@ class multinomial_Bayes(Bayes):
         return [self._multi_gaussian_log_density(sample, c) for c in range(self.n_classes)]
 
 class multi_Bayes4Test(multinomial_Bayes, Bayes4Test_PCA):
-    # pass
-    def _prepare_labels(self):
-        mappings = lambda x:0 if x==0 else (1 if x<0 else 2)
-        self.raw_labels = np.array([mappings(a[0]*a[1]-a[2]*a[3])for a in self.samples])
+    pass
+    # def _prepare_labels(self):
+    #     mappings = lambda x:0 if x==0 else (1 if x<0 else 2)
+    #     self.raw_labels = np.array([mappings(a[0]*a[1]-a[2]*a[3])for a in self.tmp])
+    # #self.tmp is meant to keep the pre-transform data
 
 class ups_multi_Bayes4Test(multinomial_Bayes, Bayes4Test_PCA):
     def _read_data(self, file, train=True):
@@ -396,9 +405,44 @@ class ups_multi_Bayes4Test(multinomial_Bayes, Bayes4Test_PCA):
             self.n_attribute = len(self.all_samples[0])
             self.n_classes = len(self.cls)
 
+def threading_data(data=None, fn=None, thread_count=None, **kwargs):
+
+    def apply_fn(results, i, data, kwargs):
+        results[i] = fn(data, **kwargs)
+
+    if thread_count is None:
+        results = [None] * len(data)
+        threads = []
+        # for i in range(len(data)):
+        #     t = threading.Thread(name='threading_and_return', target=apply_fn, args=(results, i, data[i], kwargs))
+        for i, d in enumerate(data):
+            t = threading.Thread(name='threading_and_return', target=apply_fn, args=(results, i, d, kwargs))
+            t.start()
+            threads.append(t)
+    else:
+        divs = np.linspace(0, len(data), thread_count + 1)
+        divs = np.round(divs).astype(int)
+        results = [None] * thread_count
+        threads = []
+        for i in range(thread_count):
+            t = threading.Thread(name='threading_and_return', target=apply_fn, args=(results, i, data[divs[i]:divs[i + 1]], kwargs))
+            t.start()
+            threads.append(t)
+
+    for t in threads:
+        t.join()
+
+    if thread_count is None:
+        try:
+            return np.asarray(results)
+        except Exception:
+            return results
+    else:
+        return np.concatenate(results)
+
 def main():
     logger = 'logger_{}.txt'
-    dataset = 'balance'
+    dataset = 'uspst'
     train_files = {'balance':(r'../balance_uni_train.xls', r'../balance_gnd_train.xls'),
                    'adult':'adult.data',
                    'ups':'../usps',
@@ -422,9 +466,37 @@ def main():
 
     Method = cls[dataset]
     nb = Method(continuous_attr=cont_values[dataset], logger=logger.format(dataset), dataset=dataset,
-                use_validation=False, train_ratio=0.9, use_pca=False, n_components=4)
+                use_validation=False, train_ratio=0.9, use_pca=False, n_components=20)
     nb.train(file=trainf)
-    nb.test(file=testf, verbose=True) # testing
+
+    #============== this is the validation phase for choosing n_components ==========
+    # accs = []
+    # for n in range(10,50):
+    #
+    #     initializers = [dict(continuous_attr=cont_values[dataset], logger=logger.format(dataset), dataset=dataset,
+    #                     use_validation=True, train_ratio=0.9, use_pca=True, n_components=n)]*20
+    #     th_fn = lambda d:Method(**d).train(trainf)
+    #     acc = np.mean(threading_data(initializers, fn=th_fn))
+    #     # for _ in range(20):
+    #     #     nb = Method()
+    #     #     acc += nb.train(file=trainf)
+    #     # acc /= 20.
+    #     accs.append(acc)
+    #     print('n={},acc={}'.format(n,acc))
+    #
+    # import matplotlib.pyplot as plt
+    # plt.style.use('ggplot')
+    # plt.figure(0)
+    # plt.plot(np.arange(10,50), accs, color='blue', marker='o', mec='red', mfc='none')
+    # plt.xlabel('pca_components')
+    # plt.ylabel('accuracy ')
+    # plt.grid()
+    # plt.savefig('validation2.png')
+    # plt.show()
+    #=============================================================================
+    nb.test(file=testf, verbose=True)  # testing
+
+
 
 
 if __name__ == '__main__':
